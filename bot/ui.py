@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 
 class TopicCb(CallbackData, prefix="t"):
-    action: str  # rewrite | write | more | dislike
+    action: str  # open | rewrite | write | more | dislike
     id: int
 
 
@@ -57,18 +57,39 @@ def draft_kb(draft_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def topic_card(n: int | None, topic: Topic, items: list[Item]) -> str:
-    title = f"{n}. {topic.title}" if n else topic.title
-    lines = [f"<b>{esc(title)}</b>"]
-    if topic.summary:
-        lines.append(esc(topic.summary))
-    links = " · ".join(
+def digest_kb(topics: list[Topic]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for n, topic in enumerate(topics, 1):
+        kb.button(text=str(n), callback_data=TopicCb(action="open", id=topic.id))
+    kb.adjust(5)
+    return kb.as_markup()
+
+
+def _source_links(items: list[Item], limit: int) -> str:
+    return " · ".join(
         f'<a href="{html.escape(i.url, quote=True)}">{esc(shorten(i.source_name or "источник", 40))}</a>'
-        for i in items
+        for i in items[:limit]
         if i.url.startswith("http")
     )
+
+
+def topic_card(topic: Topic, items: list[Item]) -> str:
+    lines = [f"<b>{esc(topic.title)}</b>"]
+    if topic.summary:
+        lines.append(esc(topic.summary))
+    links = _source_links(items, 6)
     if links:
         lines.append(f"\n📎 {links}")
+    return "\n".join(lines)
+
+
+def digest_entry(n: int, topic: Topic, items: list[Item]) -> str:
+    lines = [f"<b>{n}. {esc(topic.title)}</b>"]
+    if topic.summary:
+        lines.append(esc(shorten(topic.summary, 220)))
+    links = _source_links(items, 3)
+    if links:
+        lines.append(f"📎 {links}")
     return "\n".join(lines)
 
 
@@ -89,11 +110,18 @@ async def send_html(bot: Bot, chat_id: int, text: str, reply_markup=None, saniti
 
 
 async def send_digest(bot: Bot, chat_id: int, pipeline, topics: list[Topic], header: str) -> None:
-    await bot.send_message(chat_id, f"🗞 <b>{esc(header)}</b> — тем: {len(topics)}")
+    """Подборка одним списком (длинный — в 2–3 сообщения) и кнопки с номерами тем."""
+    blocks = [f"🗞 <b>{esc(header)}</b> — тем: {len(topics)}"]
     for n, topic in enumerate(topics, 1):
-        card = topic_card(n, topic, await pipeline.materials(topic))
-        msg = await send_html(bot, chat_id, card, topic_kb(topic.id), sanitize=False)
-        await pipeline.db.set_topic_msg(topic.id, msg.message_id)
+        blocks.append(digest_entry(n, topic, await pipeline.materials(topic)))
+    blocks.append("👇 Нажми номер темы — уникализирую, напишу пост или расскажу подробнее.")
+    await send_html(bot, chat_id, "\n\n".join(blocks), digest_kb(topics), sanitize=False)
+
+
+async def send_topic_card(bot: Bot, chat_id: int, pipeline, topic: Topic) -> None:
+    msg = await send_html(bot, chat_id, topic_card(topic, await pipeline.materials(topic)), topic_kb(topic.id),
+                          sanitize=False)
+    await pipeline.db.set_topic_msg(topic.id, msg.message_id)
 
 
 def error_text(e: Exception) -> str:

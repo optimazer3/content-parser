@@ -112,14 +112,24 @@ async def test_add_digest_rewrite_and_refine(h):
 
     h.reset()
     await h.send("/digest")
-    cards = [r for r in h.sent(SendMessage) if r.reply_markup]
-    assert any("Подборка</b> — тем:" in t for t in h.texts())
-    assert cards and cards[0].text.startswith("<b>1. ")
-    assert "📎 <a href=" in cards[0].text
+    digest = h.last()
+    assert digest.text.startswith("🗞 <b>Подборка</b> — тем: ")
+    assert "<b>1. " in digest.text and "📎 <a href=" in digest.text
+    # темы из всех источников: и из каналов, и с сайта
+    assert "t.me/ai_news" in digest.text and "t.me/ml_digest" in digest.text and "news.example" in digest.text
+    numbers = [b for row in digest.reply_markup.inline_keyboard for b in row]
+    assert [b.text for b in numbers][:2] == ["1", "2"]
 
-    topic = (await h.pipeline.db._topics("msg_id IS NOT NULL", (), "ORDER BY id LIMIT 1"))[0]
+    # нажали номер темы — пришла карточка с кнопками действий
+    h.reset()
+    first = TopicCb.unpack(numbers[0].callback_data)
+    await h.click(first)
+    card = h.last()
+    assert [b.text for row in card.reply_markup.inline_keyboard for b in row] == [
+        "✍️ Уникализировать", "📝 Написать пост", "📖 Подробнее", "👎 Не интересно"]
+    topic = await h.pipeline.db.get_topic(first.id)
     topic_msg = topic.msg_id
-    assert await h.pipeline.db.topic_by_msg(topic_msg) == topic
+    assert topic_msg and card.text.startswith(f"<b>{topic.title}")
 
     h.reset()
     await h.click(TopicCb(action="rewrite", id=topic.id), message_id=topic_msg)
@@ -209,3 +219,17 @@ async def test_sources_list_and_delete(h):
     await h.click(SourceCb(id=source_id))
     assert await h.pipeline.db.list_sources() == []
     assert h.sent(EditMessageText)[-1].text.startswith("Источников пока нет")
+
+
+async def test_command_cancels_pending_input(h):
+    before = await h.pipeline.interests()
+    await h.send("/topics")
+    await h.send("/setting")  # опечатка в команде не должна сохраниться как интересы
+    assert h.texts()[-1] == "Не знаю такой команды. Список — /help"
+    assert await h.pipeline.interests() == before
+
+    await h.send("/topics")
+    await h.send("ИИ")
+    assert h.texts()[-1].startswith("Слишком коротко")
+    await h.send("/settings")
+    assert "Интересы</b> (/topics)" in h.texts()[-1]

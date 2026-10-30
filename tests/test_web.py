@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
-from bot.collectors.web import WebCollector, article_links, parse_page
+from bot.collectors.web import WebCollector, article_links, feed_fits_page, parse_page
 from bot.db import Source
-from tests.conftest import BLOG_HOME
+from tests.conftest import BLOG_HOME, PAGES, TAG_PAGE
 
 
 async def no_known(urls):
@@ -44,13 +46,15 @@ async def test_feed_reads_full_article_when_summary_is_short(http, fake_web):
     items, attempted = await WebCollector(http).fetch_new(source, no_known)
     by_url = {i.url: i for i in items}
     assert set(attempted) == set(by_url) == {
-        "https://news.example/2026/10/openai-model", "https://news.example/2026/10/gemini-update"}
+        "https://news.example/2026/10/openai-model", "https://news.example/2026/10/gemini-update",
+        "https://news.example/2026/01/old-news"}
     # в RSS был только анонс — статью дочитали со страницы
     assert "миллиона токенов" in by_url["https://news.example/2026/10/openai-model"].text
     assert "https://news.example/2026/10/openai-model" in fake_web.requested
     # у второй записи полный текст уже в RSS — страницу не открывали
     assert "https://news.example/2026/10/gemini-update" not in fake_web.requested
-    assert by_url["https://news.example/2026/10/gemini-update"].published_at == "2026-10-29T12:00:00+00:00"
+    published = datetime.fromisoformat(by_url["https://news.example/2026/10/gemini-update"].published_at)
+    assert abs(published - (datetime.now(timezone.utc) - timedelta(hours=2))) < timedelta(minutes=5)
 
 
 async def test_feed_skips_known_urls(http):
@@ -60,7 +64,8 @@ async def test_feed_skips_known_urls(http):
         return {"https://news.example/2026/10/openai-model"}
 
     items, attempted = await WebCollector(http).fetch_new(source, known)
-    assert [i.url for i in items] == attempted == ["https://news.example/2026/10/gemini-update"]
+    assert "https://news.example/2026/10/openai-model" not in attempted
+    assert sorted(i.url for i in items) == sorted(attempted)
 
 
 async def test_page_mode_extracts_articles(http):
@@ -69,3 +74,44 @@ async def test_page_mode_extracts_articles(http):
     assert len(attempted) == 2
     assert {i.title for i in items} == {"Гайд по LLM-агентам", "Нейросети на работе"}
     assert all(len(i.text) > 300 for i in items)
+
+
+def test_article_links_skip_header_sidebar_and_aside():
+    assert article_links(TAG_PAGE, "https://media.example/tags/neiroset/") == [
+        "https://media.example/news/2026/10/ai-model-release",
+        "https://media.example/news/2026/10/ai-agents-office",
+        "https://media.example/news/2026/10/ai-chips-market",
+    ]
+
+
+@pytest.mark.parametrize("page, feed, fits", [
+    ("https://site.ru/", "https://site.ru/rss.xml", True),
+    ("https://site.ru/tags/neiroset/", "https://site.ru/rss.xml", False),
+    ("https://site.ru/tags/neiroset/", "https://site.ru/tags/neiroset/feed/", True),
+    ("https://site.ru/tags/neiroset/", "https://site.ru/rss/tags/neiroset", True),
+    ("https://site.ru/news/ai", "https://site.ru/rss?section=ai", True),
+])
+def test_feed_fits_page(page, feed, fits):
+    assert feed_fits_page(page, feed) is fits
+
+
+async def test_tag_page_does_not_switch_to_site_wide_rss(http):
+    # на странице тега есть ссылка только на общий RSS сайта — он не подходит, читаем саму страницу
+    title, feed = await WebCollector(http).discover("https://media.example/tags/neiroset/")
+    assert (title, feed) == ("Новости с тегом «нейросеть»", None)
+
+
+async def test_tag_page_uses_its_own_rss(http, fake_web):
+    fake_web.pages["https://media.example/tags/neiroset/feed"] = PAGES["https://news.example/feed.xml"]
+    _, feed = await WebCollector(http).discover("https://media.example/tags/neiroset/")
+    assert feed == "https://media.example/tags/neiroset/feed"
+
+
+def test_article_date_is_not_guessed_from_url():
+    from bot.collectors.web import extract_article
+    from tests.conftest import LOREM, article_html
+    item = extract_article(article_html("Статья", LOREM), "https://site.ru/news/2026/01/some-article")
+    assert item is not None and item.published_at is None
+    with_meta = article_html("Статья", LOREM).replace(
+        "<head>", '<head><meta property="article:published_time" content="2026-10-29T10:00:00+03:00">')
+    assert extract_article(with_meta, "https://site.ru/a").published_at.startswith("2026-10-29")

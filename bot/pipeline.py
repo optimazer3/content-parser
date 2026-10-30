@@ -3,11 +3,12 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 from . import prompts
 from .collectors import RawItem
 from .collectors.telegram import TelegramCollector
-from .collectors.web import WebCollector
+from .collectors.web import WebCollector, feed_fits_page
 from .config import Settings
 from .db import Database, Draft, Item, Source, Topic
 from .llm import fallback_digest
@@ -18,6 +19,19 @@ log = logging.getLogger(__name__)
 
 SCORE_BATCH = 15
 MAX_SCORE_BATCHES = 30
+
+
+def is_stale(published_at: str | None, max_age_days: int) -> bool:
+    """Пост старше max_age_days дней — не новость. Без даты считаем свежим."""
+    if not published_at:
+        return False
+    try:
+        published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    return published < datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
 
 class Pipeline:
@@ -33,6 +47,10 @@ class Pipeline:
 
     async def interests(self) -> str:
         return await self.db.get_setting("interests") or prompts.DEFAULT_INTERESTS
+
+    async def set_interests(self, text: str) -> None:
+        await self.db.set_setting("interests", text)
+        await self.db.reset_recent_scores(hours=36)
 
     async def style(self) -> str:
         return await self.db.get_setting("style") or ""
@@ -78,6 +96,7 @@ class Pipeline:
     async def collect(self) -> int:
         """Собирает новое со всех источников и оценивает. Возвращает число новых постов."""
         async with self._lock:
+            await self._recheck_site_feeds()
             sources = await self.db.list_sources()
             new = 0
 
@@ -108,11 +127,30 @@ class Pipeline:
             return new
 
     async def _save(self, source: Source, items: list[RawItem]) -> int:
+        max_age = self.settings.max_age_days
         saved = 0
         for item in items:
+            if is_stale(item.published_at, max_age):
+                continue
             if await self.db.add_item(source.id, item.url, text_hash(item.text), item.title, item.text, item.published_at):
                 saved += 1
         return saved
+
+    async def _recheck_site_feeds(self) -> None:
+        """Раньше для страницы раздела/тега бот мог взять общий RSS всего сайта. Перепроверяем такие источники один раз."""
+        if await self.db.get_setting("site_feeds_checked") == "1":
+            return
+        for source in await self.db.list_sources():
+            if source.kind != "web" or not source.feed_url or feed_fits_page(source.ref, source.feed_url):
+                continue
+            try:
+                _, feed_url = await self.web.discover(source.ref)
+            except LookupError as e:
+                log.warning("Не удалось перепроверить сайт %s: %s", source.ref, e)
+                continue
+            log.info("Сайт %s: вместо общего RSS %s читаю %s", source.ref, source.feed_url, feed_url or "саму страницу")
+            await self.db.set_feed_url(source.id, feed_url)
+        await self.db.set_setting("site_feeds_checked", "1")
 
     async def score_pending(self) -> None:
         interests = await self.interests()
@@ -153,8 +191,9 @@ class Pipeline:
         for pick in picks:
             topic_id = await self.db.add_topic(pick["title"], pick["summary"], pick["item_ids"])
             topics.append(await self.db.get_topic(topic_id))
-        # всё, что не попало в подборку, свой шанс использовало — в следующий раз не предлагаем
-        await self.db.mark_digested([i.id for i in candidates])
+        # повторно не предлагаем только то, что попало в подборку; остальное ждёт следующей, пока свежее
+        await self.db.mark_digested([i for t in topics for i in t.item_ids])
+        await self.db.mark_topics_sent([t.id for t in topics])
         return topics
 
     # --- материалы ---

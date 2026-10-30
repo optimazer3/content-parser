@@ -37,7 +37,7 @@ HELP = """<b>Что я умею</b>
 /topics — какие темы тебе интересны
 /style — образцы твоих постов, чтобы писать в твоём стиле
 /time — время подборок: <code>/time 9:00 18:30</code>
-/size — сколько тем в подборке: <code>/size 5</code>
+/size — сколько тем в подборке: <code>/size 20</code>
 /threshold — минимальная оценка темы 0–10: <code>/threshold 6</code>
 /settings — текущие настройки"""
 
@@ -126,19 +126,27 @@ async def cmd_digest(message: Message, bot: Bot, pipeline):
 @router.message(Command("topics"))
 async def cmd_topics(message: Message, command: CommandObject, state: FSMContext, pipeline):
     if command.args:
-        await pipeline.db.set_setting("interests", command.args.strip())
-        await message.answer("✅ Интересы обновил. Новые посты буду оценивать по ним.")
+        await _save_interests(message, pipeline, command.args)
         return
     await state.set_state(Form.interests)
     await message.answer(f"<b>Сейчас я отбираю темы так:</b>\n{esc(await pipeline.interests())}\n\n"
                          "Пришли новое описание одним сообщением: что интересно и что не интересно. /cancel — оставить как есть.")
 
 
+async def _save_interests(message: Message, pipeline, text: str) -> bool:
+    text = text.strip()
+    if len(text) < 15:
+        await message.answer("Слишком коротко. Опиши 1–2 предложениями, какие темы нужны и какие нет. /cancel — оставить как есть.")
+        return False
+    await pipeline.set_interests(text)
+    await message.answer("✅ Интересы обновил. Посты за последние сутки переоценю по ним при следующем сборе.")
+    return True
+
+
 @router.message(Form.interests, F.text)
 async def set_interests(message: Message, state: FSMContext, pipeline):
-    await pipeline.db.set_setting("interests", message.text.strip())
-    await state.clear()
-    await message.answer("✅ Интересы обновил.")
+    if await _save_interests(message, pipeline, message.text):
+        await state.clear()
 
 
 @router.message(Command("style"))
@@ -195,7 +203,7 @@ async def _int_command(message: Message, command: CommandObject, pipeline, key: 
 
 @router.message(Command("size"))
 async def cmd_size(message: Message, command: CommandObject, pipeline):
-    await _int_command(message, command, pipeline, "digest_size", 1, 15, "Тем в подборке")
+    await _int_command(message, command, pipeline, "digest_size", 1, 30, "Тем в подборке")
 
 
 @router.message(Command("threshold"))
@@ -218,5 +226,6 @@ async def cmd_settings(message: Message, pipeline, settings):
         f"Сбор новых постов: каждые {settings.collect_interval_min} мин\n"
         f"Модель для отбора: <code>{esc(settings.llm_model_fast)}</code>\n"
         f"Модель для текстов: <code>{esc(settings.llm_model_smart)}</code>\n"
-        f"Образец стиля: {'задан' if await pipeline.style() else 'нет'} (/style)"
+        f"Образец стиля: {'задан' if await pipeline.style() else 'нет'} (/style)\n\n"
+        f"<b>Интересы</b> (/topics):\n{esc(shorten(await pipeline.interests(), 600))}"
     )

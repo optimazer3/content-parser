@@ -104,6 +104,8 @@ class LLM:
                 score = max(0, min(10, int(round(float(row.get("score", 0))))))
             except (KeyError, TypeError, ValueError):
                 continue
+            if str(row.get("relevant", True)).lower() in ("false", "0", "no"):
+                score = min(score, 1)  # не по тематике — в подборку не попадёт, какой бы важной ни была новость
             if item_id in ids:
                 result[item_id] = {
                     "score": score,

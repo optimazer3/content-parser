@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+
 import httpx
 import pytest
 
@@ -20,12 +23,19 @@ def article_html(title: str, body: str) -> str:
             f"<article><h1>{title}</h1>{paragraphs}</article><footer>© 2026</footer></body></html>")
 
 
+# даты в RSS — относительно «сейчас», иначе через пару дней посты станут «старыми» и тесты сломаются
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
+FRESH_DATE = NOW - timedelta(hours=2)
+OLD_DATE = NOW - timedelta(days=10)
+
 RSS = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel><title>AI News</title><link>https://news.example/</link>
 <item><title>OpenAI выпустила новую модель</title><link>https://news.example/2026/10/openai-model</link>
-<description>Коротко: новая модель.</description><pubDate>Thu, 29 Oct 2026 10:00:00 GMT</pubDate></item>
+<description>Коротко: новая модель.</description><pubDate>""" + format_datetime(FRESH_DATE) + """</pubDate></item>
 <item><title>Google обновила Gemini</title><link>https://news.example/2026/10/gemini-update</link>
-<description><![CDATA[<p>""" + LOREM * 3 + """</p>]]></description><pubDate>Thu, 29 Oct 2026 12:00:00 GMT</pubDate></item>
+<description><![CDATA[<p>""" + LOREM * 3 + """</p>]]></description><pubDate>""" + format_datetime(FRESH_DATE) + """</pubDate></item>
+<item><title>Старая новость про нейросети</title><link>https://news.example/2026/01/old-news</link>
+<description><![CDATA[<p>""" + LOREM * 3 + """</p>]]></description><pubDate>""" + format_datetime(OLD_DATE) + """</pubDate></item>
 </channel></rss>"""
 
 FEED_HOME = """<html><head><title>AI News — главная</title>
@@ -39,6 +49,23 @@ BLOG_HOME = """<html><head><title>Блог без RSS</title></head><body>
 <a href="/blog/2026/10/llm-agents-guide">дубль</a>
 </body></html>"""
 
+# страница тега: в шапке — общий RSS всего сайта, в сайдбаре — «популярное» не по теме
+TAG_PAGE = """<html><head><title>Новости с тегом «нейросеть»</title>
+<link rel="alternate" type="application/rss+xml" href="/rss.xml"></head><body>
+<header><a href="/news/2026/10/site-wide-header-link">Главная новость дня</a></header>
+<main>
+  <article><header><a href="/news/2026/10/ai-model-release">Вышла новая модель</a></header></article>
+  <article><header><a href="/news/2026/10/ai-agents-office">Агенты в офисе</a></header></article>
+  <article><header><a href="/news/2026/10/ai-chips-market">Чипы для ИИ</a></header></article>
+  <div class="sidebar-popular"><a href="/news/2026/10/oil-prices-up">Нефть подорожала</a></div>
+</main>
+<aside><a href="/news/2026/10/football-results">Футбол</a></aside>
+</body></html>"""
+
+SITE_RSS = """<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Все новости</title>
+<item><title>Нефть подорожала</title><link>https://media.example/news/2026/10/oil-prices-up</link>
+<description>Цены на нефть выросли.</description></item></channel></rss>"""
+
 PAGES = {
     "https://news.example/": FEED_HOME,
     "https://news.example/feed.xml": RSS,
@@ -47,6 +74,8 @@ PAGES = {
     "https://blog.example/": BLOG_HOME,
     "https://blog.example/blog/2026/10/llm-agents-guide": article_html("Гайд по LLM-агентам", LOREM),
     "https://blog.example/blog/how-to-use-neural-networks-at-work": article_html("Нейросети на работе", LOREM),
+    "https://media.example/tags/neiroset/": TAG_PAGE,
+    "https://media.example/rss.xml": SITE_RSS,
 }
 
 

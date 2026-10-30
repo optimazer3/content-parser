@@ -3,7 +3,7 @@ from aiogram.types import CallbackQuery
 
 from .. import prompts
 from ..text import esc
-from ..ui import ChannelCb, DraftCb, TopicCb, generate
+from ..ui import ChannelCb, DraftCb, TopicCb, generate, send_topic_card
 
 router = Router()
 
@@ -22,7 +22,9 @@ async def on_topic(cb: CallbackQuery, callback_data: TopicCb, pipeline):
         return
 
     await cb.answer()
-    if callback_data.action == "rewrite":
+    if callback_data.action == "open":
+        await send_topic_card(cb.message.bot, cb.message.chat.id, pipeline, topic)
+    elif callback_data.action == "rewrite":
         await generate(cb.message, pipeline, pipeline.rewrite(topic), topic.id, wait_text="⏳ Уникализирую…")
     elif callback_data.action == "write":
         await generate(cb.message, pipeline, pipeline.write_post(topic), topic.id)

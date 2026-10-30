@@ -20,3 +20,14 @@ class OwnerOnly(BaseMiddleware):
                 await event.message.answer("Это личный бот, он отвечает только своему владельцу.")
             return None
         return await handler(event, data)
+
+
+class CommandResetsState(BaseMiddleware):
+    """Любая команда отменяет ожидание ввода: иначе после /topics команда «/setting» сохранилась бы как интересы."""
+
+    async def __call__(self, handler, event: Update, data: dict):
+        state = data.get("state")
+        if state and event.message and (event.message.text or "").startswith("/"):
+            await state.clear()
+            data["raw_state"] = None  # фильтры состояний смотрят сюда, а не в хранилище
+        return await handler(event, data)

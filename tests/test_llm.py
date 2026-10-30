@@ -101,3 +101,13 @@ def test_fallback_digest_groups_by_topic_key():
 def test_format_materials_respects_limit():
     text = format_materials([item(n, text="х" * 10000) for n in range(1, 6)], limit=5000)
     assert len(text) <= 5000 and "[1]" in text
+
+
+async def test_irrelevant_material_gets_low_score_even_if_important():
+    reply = json.dumps({"items": [
+        {"id": 1, "relevant": False, "score": 9, "title": "Нефть подорожала"},
+        {"id": 2, "relevant": "true", "score": 8, "title": "Вышла новая модель"},
+    ]})
+    llm, _ = make_llm([reply])
+    result = await llm.score_batch([item(1), item(2)], "нейросети", [])
+    assert result[1]["score"] == 1 and result[2]["score"] == 8

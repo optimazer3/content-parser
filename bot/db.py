@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS items (
     score INTEGER,                   -- NULL → ещё не оценён
     summary TEXT,
     topic_key TEXT,
-    digested INTEGER NOT NULL DEFAULT 0
+    digested INTEGER NOT NULL DEFAULT 0  -- 1 → уже был в отправленной подборке
 );
 CREATE INDEX IF NOT EXISTS items_hash ON items(text_hash);
 CREATE INDEX IF NOT EXISTS items_pending ON items(digested, score);
@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS topics (
     item_ids TEXT NOT NULL,          -- JSON-список id из items
     msg_id INTEGER,
     feedback INTEGER NOT NULL DEFAULT 0,
+    sent INTEGER NOT NULL DEFAULT 0, -- 1 → тема из отправленной подборки
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS drafts (
@@ -121,8 +122,31 @@ class Database:
         conn = await aiosqlite.connect(path)
         conn.row_factory = aiosqlite.Row
         await conn.executescript(SCHEMA)
-        await conn.commit()
-        return cls(conn)
+        db = cls(conn)
+        await db._migrate()
+        return db
+
+    async def _migrate(self) -> None:
+        async with self.conn.execute("PRAGMA user_version") as cur:
+            version = (await cur.fetchone())[0]
+        if version < 1:
+            async with self.conn.execute("PRAGMA table_info(topics)") as cur:
+                columns = {r["name"] for r in await cur.fetchall()}
+            if "sent" not in columns:
+                await self.conn.execute("ALTER TABLE topics ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
+                await self.conn.execute("UPDATE topics SET sent = 1 WHERE msg_id IS NOT NULL")
+            # раньше отработанными считались все кандидаты подборки, теперь — только попавшие в неё
+            await self.conn.execute(
+                "UPDATE items SET digested = 0 WHERE id NOT IN "
+                "(SELECT j.value FROM topics t, json_each(t.item_ids) j WHERE t.sent = 1)"
+            )
+            # свежие посты переоцениваем по новым, более строгим правилам
+            await self.conn.execute("UPDATE items SET score = NULL WHERE source_id IS NOT NULL AND collected_at >= ?",
+                                    (ago(days=3),))
+            # интересы могли случайно сохраниться как команда («/setting»)
+            await self.conn.execute("DELETE FROM settings WHERE key = 'interests' AND value LIKE '/%'")
+            await self.conn.execute("PRAGMA user_version = 1")
+        await self.conn.commit()
 
     async def close(self) -> None:
         await self.conn.close()
@@ -162,6 +186,10 @@ class Database:
         await self.conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
         await self.conn.commit()
         return sources.get(source_id)
+
+    async def set_feed_url(self, source_id: int, feed_url: str | None) -> None:
+        await self.conn.execute("UPDATE sources SET feed_url = ? WHERE id = ?", (feed_url, source_id))
+        await self.conn.commit()
 
     async def set_last_seen(self, source_id: int, last_seen: int) -> None:
         await self.conn.execute("UPDATE sources SET last_seen = ? WHERE id = ?", (last_seen, source_id))
@@ -230,10 +258,19 @@ class Database:
         )
         await self.conn.commit()
 
-    async def digest_candidates(self, min_score: int, limit: int = 60) -> list[Item]:
+    async def reset_recent_scores(self, hours: int) -> None:
+        """Свежие ещё не отправленные посты оценим заново (например, после смены интересов)."""
+        await self.conn.execute(
+            "UPDATE items SET score = NULL WHERE digested = 0 AND source_id IS NOT NULL AND collected_at >= ?",
+            (ago(hours=hours),),
+        )
+        await self.conn.commit()
+
+    async def digest_candidates(self, min_score: int, hours: int = 36, limit: int = 150) -> list[Item]:
+        """Свежие оценённые посты со всех источников, которые ещё не были в отправленных подборках."""
         return await self._items(
             "i.digested = 0 AND i.score >= ? AND i.collected_at >= ?",
-            (min_score, ago(hours=48)),
+            (min_score, ago(hours=hours)),
             f"ORDER BY i.score DESC, i.id DESC LIMIT {int(limit)}",
         )
 
@@ -279,12 +316,16 @@ class Database:
         await self.conn.execute("UPDATE topics SET msg_id = ? WHERE id = ?", (msg_id, topic_id))
         await self.conn.commit()
 
+    async def mark_topics_sent(self, topic_ids: list[int]) -> None:
+        await self.conn.executemany("UPDATE topics SET sent = 1 WHERE id = ?", [(i,) for i in topic_ids])
+        await self.conn.commit()
+
     async def set_feedback(self, topic_id: int, value: int) -> None:
         await self.conn.execute("UPDATE topics SET feedback = ? WHERE id = ?", (value, topic_id))
         await self.conn.commit()
 
     async def recent_topic_titles(self, hours: int = 36) -> list[str]:
-        topics = await self._topics("created_at >= ? AND msg_id IS NOT NULL", (ago(hours=hours),), "ORDER BY id DESC LIMIT 40")
+        topics = await self._topics("created_at >= ? AND sent = 1", (ago(hours=hours),), "ORDER BY id DESC LIMIT 60")
         return [t.title for t in topics]
 
     async def disliked_titles(self, limit: int = 30) -> list[str]:

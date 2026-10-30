@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 import feedparser
 import httpx
+import lxml.html
 import trafilatura
 
 from . import RawItem
@@ -35,6 +36,13 @@ _SKIP_PATH_RE = re.compile(
     re.I,
 )
 _ASSET_RE = re.compile(r"\.(jpe?g|png|gif|webp|svg|pdf|zip|mp4|mp3|css|js|xml)$", re.I)
+# боковые колонки, меню и подвалы: там ссылки на «популярное» и «главное» со всего сайта, а не по теме страницы
+_SIDE_TAGS = {"nav", "header", "footer", "aside"}
+_SIDE_CLASS_RE = re.compile(
+    r"(^|[\s_-])(sidebar|aside|popular|related|recommend\w*|footer|header|menu|nav|navbar|banner|promo|widget|"
+    r"trending|most-read|top-news|comments?)([\s_-]|$)",
+    re.I,
+)
 
 
 def make_http() -> httpx.AsyncClient:
@@ -45,7 +53,6 @@ class _PageParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.feeds: list[str] = []
-        self.links: list[str] = []
         self.title = ""
         self._in_title = False
 
@@ -54,8 +61,6 @@ class _PageParser(HTMLParser):
         if tag == "link" and "alternate" in a.get("rel", "").lower():
             if any(t in a.get("type", "").lower() for t in ("rss", "atom", "feed+json")) and a.get("href"):
                 self.feeds.append(a["href"])
-        elif tag == "a" and a.get("href"):
-            self.links.append(a["href"])
         elif tag == "title":
             self._in_title = True
 
@@ -85,30 +90,75 @@ def _same_site(a: str, b: str) -> bool:
     return ha == hb or ha.endswith("." + hb) or hb.endswith("." + ha)
 
 
+def _in_side_block(link) -> bool:
+    """Ссылка в меню, сайдбаре или подвале? Обёртки внутри самой карточки статьи (<article><header>) не считаем."""
+    ancestors = list(link.iterancestors())
+    first_article = next((n for n, el in enumerate(ancestors) if el.tag == "article"), None)
+    outer = ancestors[first_article:] if first_article is not None else ancestors
+    for el in outer:
+        if el.tag in ("body", "html"):
+            return False
+        names = f"{el.get('class') or ''} {el.get('id') or ''}"
+        if el.tag in _SIDE_TAGS or _SIDE_CLASS_RE.search(names):
+            return True
+    return False
+
+
+def _parse_html(html: str):
+    try:
+        return lxml.html.fromstring(html)
+    except ValueError:  # XHTML с <?xml encoding=...?> lxml берёт только байтами
+        return lxml.html.fromstring(html.encode())
+
+
+def _looks_like_article(url: str, base_url: str, base_path: str) -> bool:
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not _same_site(url, base_url):
+        return False
+    path = p.path.rstrip("/")
+    if not path or path == base_path or _SKIP_PATH_RE.search(path) or _ASSET_RE.search(path):
+        return False
+    segments = [s for s in path.split("/") if s]
+    last = segments[-1]
+    return bool(
+        (len(segments) >= 2 and (re.search(r"\d", path) or "-" in last or "_" in last or len(last) > 15))
+        or last.endswith((".html", ".htm")) or ("-" in last and len(last) > 20)
+    )
+
+
 def article_links(html: str, base_url: str) -> list[str]:
-    """Ссылки, похожие на статьи: тот же сайт, «глубокий» путь, не теги/категории/картинки."""
+    """Ссылки на статьи из основной части страницы: тот же сайт, «глубокий» путь, не теги/картинки/меню."""
+    try:
+        doc = _parse_html(html)
+    except Exception:
+        return []
+    mains = doc.xpath("//main")
+    scope = mains[0] if len(mains) == 1 else doc
     base_path = urlparse(base_url).path.rstrip("/")
-    seen, result = set(), []
-    for href in parse_page(html, base_url).links:
-        url = urljoin(base_url, href.strip())
-        p = urlparse(url)
-        if p.scheme not in ("http", "https") or not _same_site(url, base_url):
+
+    main, everything, seen = [], [], set()
+    for a in scope.iter("a"):
+        href = (a.get("href") or "").strip()
+        if not href:
             continue
-        path = p.path.rstrip("/")
-        if not path or path == base_path or _SKIP_PATH_RE.search(path) or _ASSET_RE.search(path):
+        url = urlunparse(urlparse(urljoin(base_url, href))._replace(fragment="", query=""))
+        if url in seen or not _looks_like_article(url, base_url, base_path):
             continue
-        segments = [s for s in path.split("/") if s]
-        last = segments[-1]
-        looks_like_article = (
-            len(segments) >= 2 and (re.search(r"\d", path) or "-" in last or "_" in last or len(last) > 15)
-        ) or last.endswith((".html", ".htm")) or ("-" in last and len(last) > 20)
-        if not looks_like_article:
-            continue
-        clean = urlunparse(p._replace(fragment="", query=""))
-        if clean not in seen:
-            seen.add(clean)
-            result.append(clean)
-    return result
+        seen.add(url)
+        everything.append(url)
+        if not _in_side_block(a):
+            main.append(url)
+    # если вёрстка необычная и «основных» ссылок почти не осталось — берём все
+    return main if len(main) >= 3 else everything
+
+
+def feed_fits_page(page_url: str, feed_url: str) -> bool:
+    """Подходит ли RSS к странице. Для главной — любой RSS сайта, для раздела/тега — только RSS этого раздела."""
+    segments = [seg for seg in urlparse(page_url).path.split("/") if seg]
+    if not segments:
+        return True
+    feed = urlparse(feed_url)
+    return segments[-1].lower() in f"{feed.path}?{feed.query}".lower()
 
 
 def parse_feed(content: bytes):
@@ -132,8 +182,11 @@ def _entry_text(entry) -> str:
 
 
 def extract_article(html: str, url: str) -> RawItem | None:
+    # дату берём только из метаданных страницы: «угадывание» по адресу вида /2026/10/… даёт 1-е число и
+    # свежая статья выглядела бы старой
     doc = trafilatura.bare_extraction(html, url=url, with_metadata=True, include_comments=False,
-                                      include_tables=False, favor_precision=True)
+                                      include_tables=False, favor_precision=True,
+                                      date_extraction_params={"extensive_search": False, "original_date": True})
     if not doc or not doc.text or len(doc.text) < MIN_ARTICLE:
         return None
     return RawItem(url=url, text=doc.text.strip(), title=doc.title, published_at=doc.date)
@@ -161,10 +214,18 @@ class WebCollector:
         if feed:
             return feed.feed.get("title") or urlparse(url).hostname, str(r.url)
 
-        page = parse_page(r.text, str(r.url))
+        page_url = str(r.url)
+        page = parse_page(r.text, page_url)
         title = page.title or urlparse(url).hostname
-        root = f"{r.url.scheme}://{r.url.host}"
-        for candidate in page.feeds + [root + p for p in COMMON_FEED_PATHS]:
+        if urlparse(page_url).path.strip("/"):
+            # раздел или тег: общий RSS сайта не подходит — там все новости подряд. Ищем RSS именно раздела
+            base = page_url.rstrip("/")
+            candidates = page.feeds + [base + p for p in ("/feed", "/rss", "/feed/", "/rss.xml")]
+            candidates = [c for c in candidates if feed_fits_page(page_url, c)]
+        else:
+            root = f"{r.url.scheme}://{r.url.host}"
+            candidates = page.feeds + [root + p for p in COMMON_FEED_PATHS]
+        for candidate in dict.fromkeys(candidates):
             try:
                 fr = await self._get(candidate)
             except httpx.HTTPError:

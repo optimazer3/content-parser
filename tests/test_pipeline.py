@@ -1,3 +1,6 @@
+from tests.conftest import PAGES
+
+
 async def add_all(pipeline):
     return [await pipeline.add_source(ref) for ref in ("@ai_news", "https://t.me/ml_digest", "news.example", "@nope_channel")]
 
@@ -78,3 +81,41 @@ async def test_rewrite_and_refine(pipeline):
     draft_id = await pipeline.db.add_draft(topic.id, "черновик")
     draft = await pipeline.db.get_draft(draft_id)
     assert await pipeline.refine(draft, "короче") == "черновик\n[правка: короче]"
+
+
+async def test_unselected_posts_wait_for_next_digest(pipeline):
+    await add_all(pipeline)
+    await pipeline.collect()
+    await pipeline.db.set_setting("digest_size", "1")
+    first = await pipeline.make_digest()
+    second = await pipeline.make_digest()
+    assert len(first) == len(second) == 1
+    assert set(first[0].item_ids).isdisjoint(second[0].item_ids)
+    # отправленные темы попадают в список «уже было» для следующей подборки
+    assert await pipeline.db.recent_topic_titles() == [second[0].title, first[0].title]
+
+
+async def test_old_posts_are_skipped(pipeline):
+    await pipeline.add_source("news.example")
+    await pipeline.collect()
+    urls = {i.url for i in await pipeline.db.recent_items()}
+    assert "https://news.example/2026/01/old-news" not in urls
+    assert "https://news.example/2026/10/gemini-update" in urls
+
+
+async def test_site_wide_feed_is_replaced_for_tag_page(pipeline, fake_web):
+    # так источник мог сохраниться в старой версии: страница тега, но RSS — общий для всего сайта
+    await pipeline.db.add_source("web", "https://media.example/tags/neiroset/", "Тег", "https://media.example/rss.xml")
+    for n in range(3):
+        fake_web.pages[f"https://media.example/news/2026/10/ai-{n}"] = PAGES["https://news.example/2026/10/openai-model"]
+    await pipeline.collect()
+    source = (await pipeline.db.list_sources())[0]
+    assert source.feed_url is None
+    assert all("oil-prices" not in i.url for i in await pipeline.db.recent_items())
+
+
+async def test_new_interests_trigger_rescoring(pipeline):
+    await pipeline.add_source("@ml_digest")
+    await pipeline.collect()
+    await pipeline.set_interests("Только локальные нейросети и железо для них")
+    assert len(await pipeline.db.unscored_items()) == 2

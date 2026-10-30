@@ -30,8 +30,9 @@ class Settings(BaseSettings):
 
     # Расписание и отбор (можно поменять в боте командами /time и /size)
     digest_times: str = "10:00,19:00"
-    digest_size: int = 7
+    digest_size: int = 20
     min_score: int = 6
+    max_age_days: int = 3  # посты старше — не берём
     collect_interval_min: int = 30
     timezone: str = "Europe/Moscow"
 

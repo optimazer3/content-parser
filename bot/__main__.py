@@ -17,7 +17,7 @@ from .config import Settings
 from .db import Database
 from .handlers import actions, chat, commands
 from .llm import LLM
-from .middleware import OwnerOnly
+from .middleware import CommandResetsState, OwnerOnly
 from .pipeline import Pipeline
 from .scheduler import make_scheduler, schedule_digests
 
@@ -51,6 +51,7 @@ def make_dispatcher() -> Dispatcher:
     """pipeline, scheduler и settings кладутся в dp.workflow_data — их получают обработчики."""
     dp = Dispatcher(storage=MemoryStorage())
     dp.update.outer_middleware(OwnerOnly())
+    dp.update.outer_middleware(CommandResetsState())
     dp.include_routers(commands.router, actions.router, chat.router)
     dp.errors.register(on_error)
     return dp
