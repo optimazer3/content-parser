@@ -191,8 +191,8 @@ class Pipeline:
         for pick in picks:
             topic_id = await self.db.add_topic(pick["title"], pick["summary"], pick["item_ids"])
             topics.append(await self.db.get_topic(topic_id))
-        # повторно не предлагаем только то, что попало в подборку; остальное ждёт следующей, пока свежее
-        await self.db.mark_digested([i for t in topics for i in t.item_ids])
+        # всё, что рассматривали, свой шанс использовало — в следующей подборке только новое
+        await self.db.mark_digested([i.id for i in candidates])
         await self.db.mark_topics_sent([t.id for t in topics])
         return topics
 

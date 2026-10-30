@@ -37,7 +37,7 @@ HELP = """<b>Что я умею</b>
 /topics — какие темы тебе интересны
 /style — образцы твоих постов, чтобы писать в твоём стиле
 /time — время подборок: <code>/time 9:00 18:30</code>
-/size — сколько тем в подборке: <code>/size 20</code>
+/size — сколько тем в подборке: <code>/size все</code> (по умолчанию) или <code>/size 10</code>
 /threshold — минимальная оценка темы 0–10: <code>/threshold 6</code>
 /settings — текущие настройки"""
 
@@ -201,9 +201,24 @@ async def _int_command(message: Message, command: CommandObject, pipeline, key: 
     await message.answer(f"✅ {label}: {value}")
 
 
+def _size_label(size: int) -> str:
+    return str(size) if size else "все новые по тематике"
+
+
 @router.message(Command("size"))
 async def cmd_size(message: Message, command: CommandObject, pipeline):
-    await _int_command(message, command, pipeline, "digest_size", 1, 30, "Тем в подборке")
+    arg = (command.args or "").strip().lower()
+    if arg in ("все", "всё", "all", "0"):
+        size = 0
+    elif arg.isdigit() and 1 <= int(arg) <= 50:
+        size = int(arg)
+    else:
+        await message.answer(f"Тем в подборке: {_size_label(await pipeline.int_setting('digest_size'))}.\n"
+                             "Поменять: <code>/size все</code> — присылать все новые темы, "
+                             "<code>/size 10</code> — не больше 10 самых интересных.")
+        return
+    await pipeline.db.set_setting("digest_size", str(size))
+    await message.answer(f"✅ Тем в подборке: {_size_label(size)}")
 
 
 @router.message(Command("threshold"))
@@ -221,7 +236,7 @@ async def cmd_settings(message: Message, pipeline, settings):
         f"Источники: каналов {channels}, сайтов {len(sources) - channels}\n"
         f"Чтение каналов: {tg_state}\n"
         f"Подборки: {esc(await pipeline.digest_times())} ({esc(settings.timezone)})\n"
-        f"Тем в подборке: {await pipeline.int_setting('digest_size')}\n"
+        f"Тем в подборке: {_size_label(await pipeline.int_setting('digest_size'))}\n"
         f"Минимальная оценка: {await pipeline.int_setting('min_score')}\n"
         f"Сбор новых постов: каждые {settings.collect_interval_min} мин\n"
         f"Модель для отбора: <code>{esc(settings.llm_model_fast)}</code>\n"

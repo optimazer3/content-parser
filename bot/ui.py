@@ -57,9 +57,9 @@ def draft_kb(draft_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def digest_kb(topics: list[Topic]) -> InlineKeyboardMarkup:
+def digest_kb(numbered: list[tuple[int, Topic]]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for n, topic in enumerate(topics, 1):
+    for n, topic in numbered:
         kb.button(text=str(n), callback_data=TopicCb(action="open", id=topic.id))
     kb.adjust(5)
     return kb.as_markup()
@@ -109,13 +109,24 @@ async def send_html(bot: Bot, chat_id: int, text: str, reply_markup=None, saniti
     return sent
 
 
+DIGEST_PAGE = 3500  # символов в одном сообщении подборки (лимит Telegram — 4096)
+
+
 async def send_digest(bot: Bot, chat_id: int, pipeline, topics: list[Topic], header: str) -> None:
-    """Подборка одним списком (длинный — в 2–3 сообщения) и кнопки с номерами тем."""
-    blocks = [f"🗞 <b>{esc(header)}</b> — тем: {len(topics)}"]
+    """Подборка списком. Длинная — несколькими сообщениями, у каждого кнопки с номерами его тем."""
+    head = f"🗞 <b>{esc(header)}</b> — тем: {len(topics)}\nНажми номер темы — уникализирую, напишу пост или расскажу подробнее."
+    pages: list[list[tuple[int, Topic, str]]] = [[]]
+    size = len(head)
     for n, topic in enumerate(topics, 1):
-        blocks.append(digest_entry(n, topic, await pipeline.materials(topic)))
-    blocks.append("👇 Нажми номер темы — уникализирую, напишу пост или расскажу подробнее.")
-    await send_html(bot, chat_id, "\n\n".join(blocks), digest_kb(topics), sanitize=False)
+        entry = digest_entry(n, topic, await pipeline.materials(topic))
+        if pages[-1] and size + len(entry) > DIGEST_PAGE:
+            pages.append([])
+            size = 0
+        pages[-1].append((n, topic, entry))
+        size += len(entry) + 2
+    for i, page in enumerate(pages):
+        text = "\n\n".join(([head] if i == 0 else []) + [entry for _, _, entry in page])
+        await send_html(bot, chat_id, text, digest_kb([(n, t) for n, t, _ in page]), sanitize=False)
 
 
 async def send_topic_card(bot: Bot, chat_id: int, pipeline, topic: Topic) -> None:

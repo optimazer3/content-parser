@@ -83,14 +83,19 @@ async def test_rewrite_and_refine(pipeline):
     assert await pipeline.refine(draft, "короче") == "черновик\n[правка: короче]"
 
 
-async def test_unselected_posts_wait_for_next_digest(pipeline):
+async def test_next_digest_has_only_new_posts(pipeline, tg):
     await add_all(pipeline)
     await pipeline.collect()
     await pipeline.db.set_setting("digest_size", "1")
     first = await pipeline.make_digest()
+    assert len(first) == 1
+    # не попавшие в подборку посты уже рассмотрены — повторно не предлагаем
+    assert await pipeline.make_digest() == []
+
+    tg.posts["ai_news"].append("Google представила новую нейросеть Gemini для работы с кодом и документами.")
+    await pipeline.collect()
     second = await pipeline.make_digest()
-    assert len(first) == len(second) == 1
-    assert set(first[0].item_ids).isdisjoint(second[0].item_ids)
+    assert [len(t.item_ids) for t in second] == [1] and "Gemini" in (await pipeline.materials(second[0]))[0].text
     # отправленные темы попадают в список «уже было» для следующей подборки
     assert await pipeline.db.recent_topic_titles() == [second[0].title, first[0].title]
 

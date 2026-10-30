@@ -53,14 +53,14 @@ def format_materials(items: list[Item], limit: int = MATERIALS_LIMIT) -> str:
 
 
 def fallback_digest(candidates: list[Item], size: int) -> list[dict]:
-    """Если модель не справилась с подборкой: группируем по topic_key и берём лучшие."""
+    """Если модель не справилась с подборкой: группируем по topic_key и берём лучшие (size=0 — все)."""
     groups: dict[str, list[Item]] = {}
     for item in candidates:
         groups.setdefault(item.topic_key or f"item-{item.id}", []).append(item)
     ranked = sorted(groups.values(), key=lambda g: max(i.score or 0 for i in g), reverse=True)
     return [
         {"title": g[0].title or shorten(g[0].text, 80), "summary": g[0].summary or "", "item_ids": [i.id for i in g]}
-        for g in ranked[:size]
+        for g in ranked[:size or None]
     ]
 
 
@@ -116,8 +116,10 @@ class LLM:
         return result
 
     async def select_digest(self, candidates: list[Item], size: int, interests: str, sent: list[str]) -> list[dict]:
+        """size=0 — все темы по тематике, без ограничения."""
         system = prompts.SELECT_SYSTEM.format(
-            size=size, interests=interests, sent="\n".join(f"- {t}" for t in sent) or "- (ничего)"
+            interests=interests, sent="\n".join(f"- {t}" for t in sent) or "- (ничего)",
+            limit=prompts.SELECT_LIMIT.format(size=size) if size else prompts.SELECT_ALL,
         )
         user = "\n".join(
             f"id={i.id} | score={i.score} | {i.source_name} | {i.title} — {i.summary} [{i.topic_key}]"
@@ -142,7 +144,7 @@ class LLM:
             title = str(row.get("title") or "").strip()
             if ids and title:
                 topics.append({"title": shorten(title, 120), "summary": str(row.get("summary") or ""), "item_ids": ids})
-        return topics[:size]
+        return topics[:size or None]
 
     # --- написание ---
 

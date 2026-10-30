@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS items (
     score INTEGER,                   -- NULL → ещё не оценён
     summary TEXT,
     topic_key TEXT,
-    digested INTEGER NOT NULL DEFAULT 0  -- 1 → уже был в отправленной подборке
+    digested INTEGER NOT NULL DEFAULT 0  -- 1 → уже рассматривался в подборке, больше не предлагаем
 );
 CREATE INDEX IF NOT EXISTS items_hash ON items(text_hash);
 CREATE INDEX IF NOT EXISTS items_pending ON items(digested, score);
@@ -135,17 +135,19 @@ class Database:
             if "sent" not in columns:
                 await self.conn.execute("ALTER TABLE topics ADD COLUMN sent INTEGER NOT NULL DEFAULT 0")
                 await self.conn.execute("UPDATE topics SET sent = 1 WHERE msg_id IS NOT NULL")
-            # раньше отработанными считались все кандидаты подборки, теперь — только попавшие в неё
-            await self.conn.execute(
-                "UPDATE items SET digested = 0 WHERE id NOT IN "
-                "(SELECT j.value FROM topics t, json_each(t.item_ids) j WHERE t.sent = 1)"
-            )
-            # свежие посты переоцениваем по новым, более строгим правилам
-            await self.conn.execute("UPDATE items SET score = NULL WHERE source_id IS NOT NULL AND collected_at >= ?",
-                                    (ago(days=3),))
+            # свежие ещё не рассмотренные посты переоцениваем по новым, более строгим правилам
+            await self.conn.execute("UPDATE items SET score = NULL WHERE digested = 0 AND source_id IS NOT NULL "
+                                    "AND collected_at >= ?", (ago(days=3),))
             # интересы могли случайно сохраниться как команда («/setting»)
             await self.conn.execute("DELETE FROM settings WHERE key = 'interests' AND value LIKE '/%'")
             await self.conn.execute("PRAGMA user_version = 1")
+        if version < 2:
+            # промежуточная версия возвращала в подборки посты, которые уже рассматривались.
+            # Всё, что было собрано до последней подборки, снова считаем отработанным
+            await self.conn.execute(
+                "UPDATE items SET digested = 1 WHERE collected_at <= (SELECT MAX(created_at) FROM topics WHERE sent = 1)"
+            )
+            await self.conn.execute("PRAGMA user_version = 2")
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -266,8 +268,8 @@ class Database:
         )
         await self.conn.commit()
 
-    async def digest_candidates(self, min_score: int, hours: int = 36, limit: int = 150) -> list[Item]:
-        """Свежие оценённые посты со всех источников, которые ещё не были в отправленных подборках."""
+    async def digest_candidates(self, min_score: int, hours: int = 36, limit: int = 300) -> list[Item]:
+        """Новые оценённые посты со всех источников, которые ещё не рассматривались в подборках."""
         return await self._items(
             "i.digested = 0 AND i.score >= ? AND i.collected_at >= ?",
             (min_score, ago(hours=hours)),

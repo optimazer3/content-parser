@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Chat, Message, MessageOriginChannel, Up
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.__main__ import make_dispatcher
-from bot.ui import ChannelCb, DraftCb, SourceCb, TopicCb
+from bot.ui import ChannelCb, DraftCb, SourceCb, TopicCb, send_digest
 
 OWNER, STRANGER = 111, 222
 
@@ -233,3 +233,25 @@ async def test_command_cancels_pending_input(h):
     assert h.texts()[-1].startswith("Слишком коротко")
     await h.send("/settings")
     assert "Интересы</b> (/topics)" in h.texts()[-1]
+
+
+async def test_size_all_and_long_digest_is_paginated(h):
+    await h.send("/size все")
+    assert h.texts()[-1] == "✅ Тем в подборке: все новые по тематике"
+    assert await h.pipeline.int_setting("digest_size") == 0
+
+    h.reset()
+    topics = []
+    for n in range(1, 31):
+        topic_id = await h.pipeline.db.add_topic(f"Тема номер {n} про нейросети", "Суть новости. " * 15, [])
+        topics.append(await h.pipeline.db.get_topic(topic_id))
+    await send_digest(h.bot, OWNER, h.pipeline, topics, "Подборка")
+    pages = h.sent(SendMessage)
+    assert len(pages) > 1 and all(len(p.text) <= 4096 for p in pages)
+    assert pages[0].text.startswith("🗞 <b>Подборка</b> — тем: 30")
+    # у каждого сообщения свои кнопки — номера тем из этого сообщения, по порядку
+    numbers = [int(b.text) for p in pages for row in p.reply_markup.inline_keyboard for b in row]
+    assert numbers == list(range(1, 31))
+    for page in pages:
+        on_page = [int(b.text) for row in page.reply_markup.inline_keyboard for b in row]
+        assert all(f"<b>{n}. Тема номер {n} " in page.text for n in on_page)

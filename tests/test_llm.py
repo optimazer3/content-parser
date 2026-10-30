@@ -111,3 +111,18 @@ async def test_irrelevant_material_gets_low_score_even_if_important():
     llm, _ = make_llm([reply])
     result = await llm.score_batch([item(1), item(2)], "нейросети", [])
     assert result[1]["score"] == 1 and result[2]["score"] == 8
+
+
+async def test_select_digest_without_limit_asks_for_all_topics():
+    reply = json.dumps({"topics": [{"title": f"Тема {n}", "summary": "s", "item_ids": [n]} for n in range(1, 4)]})
+    llm, completions = make_llm([reply, reply])
+    topics = await llm.select_digest([item(1), item(2), item(3)], 0, "", [])
+    assert len(topics) == 3
+    assert "Включи все новости" in completions.calls[0]["messages"][0]["content"]
+    # с ограничением — просим не больше N и обрезаем лишнее
+    topics = await llm.select_digest([item(1), item(2), item(3)], 2, "", [])
+    assert len(topics) == 2 and "Не больше 2 тем" in completions.calls[1]["messages"][0]["content"]
+
+
+def test_fallback_digest_without_limit_keeps_everything():
+    assert len(fallback_digest([item(1, 9, "a"), item(2, 6, "b"), item(3, 8, "c")], 0)) == 3

@@ -30,7 +30,7 @@ class Settings(BaseSettings):
 
     # Расписание и отбор (можно поменять в боте командами /time и /size)
     digest_times: str = "10:00,19:00"
-    digest_size: int = 20
+    digest_size: int = 0  # 0 — все новые темы по тематике, без ограничения
     min_score: int = 6
     max_age_days: int = 3  # посты старше — не берём
     collect_interval_min: int = 30
