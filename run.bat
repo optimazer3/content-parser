@@ -8,7 +8,7 @@ if not exist .venv (
 )
 call .venv\Scripts\activate.bat
 echo Ставлю зависимости...
-pip install -q -r requirements.txt
+pip install -q --disable-pip-version-check -r requirements.txt
 
 if not exist .env (
     copy .env.example .env >nul
@@ -19,9 +19,6 @@ if not exist .env (
     exit /b
 )
 
-if not exist data\userbot.session (
-    findstr /r "^TG_API_ID=[0-9]" .env >nul && python -m bot.login
-)
-
+python -m bot.login --if-needed || (pause & exit /b 1)
 python -m bot
 pause

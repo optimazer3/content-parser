@@ -1,6 +1,6 @@
 import pytest
 
-from bot.config import parse_times, telethon_proxy
+from bot.config import Settings, parse_times, system_proxy, telethon_proxy
 from bot.sources import classify_ref, split_refs
 from bot.text import sanitize_html, split_message, strip_html, text_hash
 
@@ -86,3 +86,23 @@ def test_telethon_proxy():
     assert telethon_proxy("socks5://u:p@127.0.0.1:1080") == {
         "proxy_type": "socks5", "addr": "127.0.0.1", "port": 1080, "username": "u", "password": "p", "rdns": True,
     }
+
+
+@pytest.mark.parametrize("proxies, expected", [
+    ({}, ""),
+    # так Windows отдаёт прокси VPN-клиента в режиме «системный прокси»
+    ({"http": "http://127.0.0.1:10809", "https": "https://127.0.0.1:10809"}, "http://127.0.0.1:10809"),
+    ({"socks": "socks://127.0.0.1:10808", "http": "http://127.0.0.1:10809"}, "socks5://127.0.0.1:10808"),
+    ({"https": "127.0.0.1:7890"}, "http://127.0.0.1:7890"),
+    ({"no": "localhost"}, ""),
+])
+def test_system_proxy(monkeypatch, proxies, expected):
+    monkeypatch.setattr("urllib.request.getproxies", lambda: proxies)
+    assert system_proxy() == expected
+
+
+def test_proxy_url_modes(monkeypatch):
+    monkeypatch.setattr("urllib.request.getproxies", lambda: {"http": "http://127.0.0.1:10809"})
+    assert Settings(_env_file=None).proxy_url == "http://127.0.0.1:10809"  # по умолчанию auto
+    assert Settings(_env_file=None, tg_proxy="off").proxy_url == ""
+    assert Settings(_env_file=None, tg_proxy="socks5://1.2.3.4:1080").proxy_url == "socks5://1.2.3.4:1080"

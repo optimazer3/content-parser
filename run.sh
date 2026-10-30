@@ -8,7 +8,7 @@ if [ ! -d .venv ]; then
 fi
 source .venv/bin/activate
 echo "Ставлю зависимости..."
-pip install -q -r requirements.txt
+pip install -q --disable-pip-version-check -r requirements.txt
 
 if [ ! -f .env ]; then
     cp .env.example .env
@@ -16,8 +16,6 @@ if [ ! -f .env ]; then
     exit 0
 fi
 
-if [ ! -f data/userbot.session ] && grep -qE '^TG_API_ID=[0-9]' .env; then
-    python -m bot.login
-fi
+python -m bot.login --if-needed
 
 exec python -m bot

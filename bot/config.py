@@ -1,3 +1,4 @@
+import urllib.request
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,8 +18,9 @@ class Settings(BaseSettings):
     tg_api_id: int = 0
     tg_api_hash: str = ""
     tg_session: str = "data/userbot"
-    # Прокси для Telegram, например socks5://user:pass@host:1080 (необязательно)
-    tg_proxy: str = ""
+    # Прокси для Telegram: auto — взять системный (так работают VPN-клиенты в режиме «системный прокси»),
+    # off — без прокси, или адрес вида socks5://127.0.0.1:10808 / http://127.0.0.1:10809
+    tg_proxy: str = "auto"
 
     # Нейросеть через Polza.ai (OpenAI-совместимый API)
     polza_api_key: str = ""
@@ -38,6 +40,31 @@ class Settings(BaseSettings):
     @property
     def telethon_enabled(self) -> bool:
         return bool(self.tg_api_id and self.tg_api_hash)
+
+    @property
+    def proxy_url(self) -> str:
+        """Прокси, через который ходим в Telegram ('' — напрямую)."""
+        value = self.tg_proxy.strip()
+        if value.lower() in ("off", "none", "no", "0"):
+            return ""
+        if value.lower() == "auto":
+            return system_proxy()
+        return value
+
+
+def system_proxy() -> str:
+    """Системный прокси Windows/macOS или из переменных окружения, в виде socks5://… или http://…"""
+    proxies = urllib.request.getproxies()
+    for key in ("socks", "https", "http"):
+        value = proxies.get(key)
+        if not value:
+            continue
+        p = urlparse(value if "://" in value else f"http://{value}")
+        if p.hostname and p.port:
+            # в настройках Windows адрес для https записан как https://host:port, но сам прокси — обычный HTTP
+            scheme = "socks5" if key == "socks" or p.scheme.startswith("socks") else "http"
+            return f"{scheme}://{p.hostname}:{p.port}"
+    return ""
 
 
 def parse_times(value: str) -> list[tuple[int, int]]:

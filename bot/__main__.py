@@ -11,11 +11,9 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.types import BotCommand, ErrorEvent
-from telethon import TelegramClient
-
-from .collectors.telegram import TelegramCollector
+from .collectors.telegram import CONNECT_ERRORS, TelegramCollector, connection_hint, make_client
 from .collectors.web import WebCollector, make_http
-from .config import Settings, telethon_proxy
+from .config import Settings
 from .db import Database
 from .handlers import actions, chat, commands
 from .llm import LLM
@@ -72,13 +70,13 @@ async def main() -> None:
 
         tg_client = None
         if settings.telethon_enabled:
-            tg_client = TelegramClient(settings.tg_session, settings.tg_api_id, settings.tg_api_hash,
-                                       proxy=telethon_proxy(settings.tg_proxy))
-            log.info("Подключаю аккаунт для чтения каналов…")
+            tg_client = make_client(settings)
+            log.info("Подключаю аккаунт для чтения каналов%s…",
+                     f" через прокси {settings.proxy_url}" if settings.proxy_url else "")
             try:
                 await tg_client.connect()
-            except (OSError, EOFError) as e:  # EOFError — соединение оборвали (часто так выглядит блокировка)
-                sys.exit(f"Не удалось подключиться к Telegram ({e.__class__.__name__}). Проверь интернет или TG_PROXY в .env")
+            except CONNECT_ERRORS:
+                sys.exit(connection_hint(settings))
             stack.push_async_callback(tg_client.disconnect)
             if not await tg_client.is_user_authorized():
                 sys.exit("Аккаунт для чтения каналов не авторизован. Сначала выполни: python -m bot.login")
@@ -90,7 +88,7 @@ async def main() -> None:
 
         bot = Bot(
             settings.bot_token,
-            session=AiohttpSession(proxy=settings.tg_proxy) if settings.tg_proxy else None,
+            session=AiohttpSession(proxy=settings.proxy_url) if settings.proxy_url else None,
             default=DefaultBotProperties(parse_mode="HTML", link_preview_is_disabled=True),
         )
         stack.push_async_callback(bot.session.close)
@@ -104,8 +102,8 @@ async def main() -> None:
             me = await bot.get_me()
         except TelegramUnauthorizedError:
             sys.exit("Telegram не принял BOT_TOKEN — проверь токен от @BotFather в .env")
-        except TelegramNetworkError as e:
-            sys.exit(f"Не удалось связаться с Telegram ({e.message}). Проверь интернет или TG_PROXY в .env")
+        except TelegramNetworkError:
+            sys.exit(connection_hint(settings))
         await bot.set_my_commands(COMMANDS)
         scheduler.start()
         stack.callback(scheduler.shutdown, wait=False)
