@@ -1,0 +1,11 @@
+aiogram>=3.31,<4
+aiohttp-socks>=0.10
+telethon>=1.45,<2
+python-socks[asyncio]>=2.7
+openai>=3.41
+httpx>=0.28
+feedparser>=6.0
+trafilatura>=2.3
+apscheduler>=3.11,<4
+aiosqlite>=0.22
+pydantic-settings>=2.16
