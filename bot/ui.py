@@ -30,11 +30,6 @@ class SourceCb(CallbackData, prefix="s"):
     id: int
 
 
-class AccessCb(CallbackData, prefix="a"):
-    action: str  # allow | deny | remove
-    user_id: int
-
-
 class ChannelCb(CallbackData, prefix="c"):
     ref: str  # username или числовой id канала (-100…)
 

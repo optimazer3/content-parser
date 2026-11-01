@@ -31,7 +31,6 @@ COMMANDS = [
     BotCommand(command="style", description="Образцы моих постов"),
     BotCommand(command="time", description="Время подборок"),
     BotCommand(command="settings", description="Настройки"),
-    BotCommand(command="users", description="Мои аккаунты с доступом"),
     BotCommand(command="help", description="Что умеет бот"),
 ]
 

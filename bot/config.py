@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Бот от @BotFather
     bot_token: str = ""
     # Telegram ID владельца, можно несколько через запятую (например, второй свой аккаунт).
-    # Если пусто — владельцем станет первый, кто напишет /start. Ещё аккаунты можно добавить из бота
+    # Если пусто — владельцем станет первый, кто напишет /start
     owner_id: str = ""
 
     # Userbot (my.telegram.org → API development tools)

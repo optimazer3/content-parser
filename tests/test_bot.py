@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from bot.__main__ import make_dispatcher
 from bot.scheduler import run_digest
-from bot.ui import AccessCb, ChannelCb, DraftCb, SourceCb, TopicCb, send_digest
+from bot.ui import ChannelCb, DraftCb, SourceCb, TopicCb, send_digest
 
 OWNER, STRANGER = 111, 222
 
@@ -99,29 +99,20 @@ async def h(dp, pipeline, settings):
 async def test_first_start_claims_owner_and_strangers_are_ignored(h):
     assert await h.pipeline.owner_ids() == [OWNER]
     await h.send("/start", user=STRANGER)
-    stranger_reply, request = h.sent(SendMessage)
-    assert stranger_reply.chat_id == STRANGER and f"<code>{STRANGER}</code>" in stranger_reply.text
-    # владельцу пришёл запрос с кнопками
-    assert request.chat_id == OWNER and "хочет пользоваться ботом" in request.text
-    assert [b.text for row in request.reply_markup.inline_keyboard for b in row] == ["✅ Пустить", "🚫 Нет"]
-
-    h.reset()
-    await h.send("/start", user=STRANGER)  # повторный /start не спамит владельца
-    assert [m.chat_id for m in h.sent(SendMessage)] == [STRANGER]
+    # посторонний видит только свой ID, владельца никто не дёргает
+    assert [(m.chat_id, m.text) for m in h.sent(SendMessage)] == [
+        (STRANGER, f"Это личный бот. Твой Telegram ID: <code>{STRANGER}</code>")]
     h.reset()
     await h.send("/digest", user=STRANGER)
     await h.send("напиши пост про GPT", user=STRANGER)
     assert h.session.requests == []
 
 
-async def test_second_account_gets_access_and_digests(h):
-    await h.send("/start", user=STRANGER)
-    await h.click(AccessCb(action="allow", user_id=STRANGER))
-    assert await h.pipeline.owner_ids() == [OWNER, STRANGER]
-    assert any(m.chat_id == STRANGER and "Доступ к боту открыт" in m.text for m in h.sent(SendMessage))
+async def test_second_account_from_env(h, settings):
+    # в OWNER_ID вписан только второй аккаунт — первый (нажавший /start) тоже остаётся
+    h.pipeline.settings = settings.model_copy(update={"owner_id": f"{STRANGER}"})
+    assert await h.pipeline.owner_ids() == [STRANGER, OWNER]
 
-    # второй аккаунт пользуется тем же ботом: те же источники и интересы
-    h.reset()
     await h.send("/add @ai_news", user=STRANGER)
     assert [s.ref for s in await h.pipeline.db.list_sources()] == ["ai_news"]
 
@@ -134,30 +125,10 @@ async def test_second_account_gets_access_and_digests(h):
     await h.send("/digest", user=STRANGER)
     assert {m.chat_id for m in h.sent(SendMessage)} == {STRANGER}
 
-    # /users: владельца убрать нельзя, добавленный аккаунт — можно
-    h.reset()
-    await h.send("/users")
-    users = h.last()
-    assert f"<code>{OWNER}</code> — владелец" in users.text
-    assert [b.text for row in users.reply_markup.inline_keyboard for b in row] == [f"❌ Убрать {STRANGER}"]
-    await h.click(AccessCb(action="remove", user_id=STRANGER))
-    assert await h.pipeline.owner_ids() == [OWNER]
 
-
-async def test_adduser_command_and_ids_from_env(h, settings):
-    def to_owner():
-        return [m.text for m in h.sent(SendMessage) if m.chat_id == OWNER][-1]
-
-    await h.send("/adduser 333")
-    assert to_owner().startswith("✅ Доступ открыт для <code>333</code>")
-    assert h.last().chat_id == 333  # новому аккаунту бот написал, что доступ открыт
-    await h.send("/adduser 333")
-    assert to_owner().startswith("ℹ️")
-    assert await h.pipeline.owner_ids() == [OWNER, 333]
-
-    h.pipeline.settings = settings.model_copy(update={"owner_id": "444, 555"})
-    assert h.pipeline.settings.owner_ids == [444, 555]
-    assert await h.pipeline.owner_ids() == [444, 555, 333]
+def test_owner_ids_parsing(settings):
+    assert settings.model_copy(update={"owner_id": "111, 222;333"}).owner_ids == [111, 222, 333]
+    assert settings.model_copy(update={"owner_id": ""}).owner_ids == []
 
 
 async def test_add_digest_rewrite_and_refine(h):

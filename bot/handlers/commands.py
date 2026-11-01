@@ -12,7 +12,7 @@ from ..config import parse_times
 from ..scheduler import run_digest, schedule_digests
 from ..sources import split_refs
 from ..text import esc, shorten
-from ..ui import AccessCb, SourceCb, error_text, send_html
+from ..ui import SourceCb, error_text, send_html
 
 router = Router()
 
@@ -39,8 +39,7 @@ HELP = """<b>Что я умею</b>
 /time — время подборок: <code>/time 9:00 18:30</code>
 /size — сколько тем в подборке: <code>/size все</code> (по умолчанию) или <code>/size 10</code>
 /threshold — минимальная оценка темы 0–10: <code>/threshold 6</code>
-/settings — текущие настройки
-/users — твои аккаунты с доступом к боту (например, второй аккаунт)"""
+/settings — текущие настройки"""
 
 
 class Form(StatesGroup):
@@ -234,7 +233,7 @@ async def cmd_settings(message: Message, pipeline, settings):
     tg_state = "подключено" if pipeline.tg else "не настроено (нужны TG_API_ID, TG_API_HASH и python -m bot.login)"
     await message.answer(
         "<b>Настройки</b>\n"
-        f"Аккаунтов с доступом: {len(await pipeline.owner_ids())} (/users)\n"
+        f"Аккаунты с доступом: {', '.join(map(str, await pipeline.owner_ids()))} (OWNER_ID в .env)\n"
         f"Источники: каналов {channels}, сайтов {len(sources) - channels}\n"
         f"Чтение каналов: {tg_state}\n"
         f"Подборки: {esc(await pipeline.digest_times())} ({esc(settings.timezone)})\n"
@@ -247,61 +246,3 @@ async def cmd_settings(message: Message, pipeline, settings):
         f"<b>Интересы</b> (/topics):\n{esc(shorten(await pipeline.interests(), 600))}"
     )
 
-
-async def _users_view(pipeline) -> tuple[str, object]:
-    owners = pipeline.settings.owner_ids or [int(v) for v in [await pipeline.db.get_setting("owner_id")] if v]
-    lines, kb = ["<b>Аккаунты с доступом к боту</b>"], InlineKeyboardBuilder()
-    for user_id in await pipeline.owner_ids():
-        if user_id in owners:
-            lines.append(f"• <code>{user_id}</code> — владелец")
-        else:
-            lines.append(f"• <code>{user_id}</code>")
-            kb.button(text=f"❌ Убрать {user_id}", callback_data=AccessCb(action="remove", user_id=user_id))
-    lines.append("\nДобавить аккаунт: нажми /start с него — сюда придёт запрос с кнопкой «Пустить». "
-                 "Или отправь <code>/adduser ID</code>.")
-    kb.adjust(1)
-    return "\n".join(lines), kb.as_markup()
-
-
-@router.message(Command("users"))
-async def cmd_users(message: Message, pipeline):
-    text, kb = await _users_view(pipeline)
-    await message.answer(text, reply_markup=kb)
-
-
-@router.message(Command("adduser"))
-async def cmd_adduser(message: Message, command: CommandObject, bot: Bot, pipeline):
-    arg = (command.args or "").strip()
-    if not arg.isdigit():
-        await message.answer("Пришли ID аккаунта: <code>/adduser 123456789</code>. "
-                             "Свой ID аккаунт увидит, если нажмёт /start в этом боте.")
-        return
-    await _grant(message, bot, pipeline, int(arg))
-
-
-async def _grant(message: Message, bot: Bot, pipeline, user_id: int) -> None:
-    if not await pipeline.add_user(user_id):
-        await message.answer(f"ℹ️ У аккаунта <code>{user_id}</code> доступ уже есть.")
-        return
-    await message.answer(f"✅ Доступ открыт для <code>{user_id}</code>. Источники, интересы и подборки у аккаунтов общие.")
-    with suppress(Exception):  # аккаунт мог ещё не нажать /start — тогда бот не может ему написать
-        await bot.send_message(user_id, "✅ Доступ к боту открыт. Нажми /start.")
-
-
-@router.callback_query(AccessCb.filter())
-async def on_access(cb: CallbackQuery, callback_data: AccessCb, bot: Bot, pipeline):
-    await cb.answer()
-    user_id = callback_data.user_id
-    if callback_data.action == "allow":
-        await cb.message.edit_reply_markup(reply_markup=None)
-        await _grant(cb.message, bot, pipeline, user_id)
-    elif callback_data.action == "deny":
-        await cb.message.edit_text(f"🚫 Запрос от <code>{user_id}</code> отклонён.")
-    elif callback_data.action == "remove":
-        if user_id == cb.from_user.id:
-            await cb.message.answer("Нельзя убрать аккаунт, с которого ты сейчас пишешь.")
-            return
-        await pipeline.remove_user(user_id)
-        text, kb = await _users_view(pipeline)
-        with suppress(TelegramBadRequest):
-            await cb.message.edit_text(text, reply_markup=kb)
