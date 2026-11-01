@@ -31,17 +31,19 @@ COMMANDS = [
     BotCommand(command="style", description="Образцы моих постов"),
     BotCommand(command="time", description="Время подборок"),
     BotCommand(command="settings", description="Настройки"),
+    BotCommand(command="users", description="Мои аккаунты с доступом"),
     BotCommand(command="help", description="Что умеет бот"),
 ]
 
 
 async def on_error(event: ErrorEvent, bot: Bot, pipeline) -> bool:
     log.error("Ошибка при обработке апдейта", exc_info=event.exception)
-    owner = await pipeline.owner_id()
-    if owner:
+    source = event.update.message or event.update.callback_query
+    user = source.from_user if source else None
+    if user:
         try:
-            await bot.send_message(owner, f"⚠️ Внутренняя ошибка: {event.exception.__class__.__name__}. "
-                                          "Подробности — в окне, где запущен бот.", parse_mode=None)
+            await bot.send_message(user.id, f"⚠️ Внутренняя ошибка: {event.exception.__class__.__name__}. "
+                                            "Подробности — в окне, где запущен бот.", parse_mode=None)
         except Exception:
             pass
     return True

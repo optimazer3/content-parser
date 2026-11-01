@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramForbiddenError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -12,16 +13,19 @@ from .ui import send_digest
 log = logging.getLogger(__name__)
 
 
-async def run_digest(bot: Bot, pipeline, header: str = "Подборка") -> int:
-    """Собрать свежее, отобрать темы и прислать владельцу. Возвращает число тем."""
-    owner = await pipeline.owner_id()
-    if not owner:
+async def run_digest(bot: Bot, pipeline, header: str = "Подборка", chat_ids: list[int] | None = None) -> int:
+    """Собрать свежее, отобрать темы и прислать (по умолчанию — во все аккаунты владельца). Возвращает число тем."""
+    chat_ids = chat_ids or await pipeline.owner_ids()
+    if not chat_ids:
         log.info("Владелец ещё не нажал /start — подборку отправлять некому")
         return 0
     await pipeline.collect()
     topics = await pipeline.make_digest()
-    if topics:
-        await send_digest(bot, owner, pipeline, topics, header)
+    for chat_id in chat_ids if topics else []:
+        try:
+            await send_digest(bot, chat_id, pipeline, topics, header)
+        except TelegramForbiddenError:
+            log.warning("Аккаунт %s заблокировал бота — подборку ему не отправил", chat_id)
     return len(topics)
 
 

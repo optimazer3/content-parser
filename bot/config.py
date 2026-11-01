@@ -1,3 +1,4 @@
+import re
 import urllib.request
 from urllib.parse import urlparse
 
@@ -11,8 +12,9 @@ class Settings(BaseSettings):
 
     # Бот от @BotFather
     bot_token: str = ""
-    # Telegram ID владельца. Если пусто — владельцем станет первый, кто напишет /start
-    owner_id: int = 0
+    # Telegram ID владельца, можно несколько через запятую (например, второй свой аккаунт).
+    # Если пусто — владельцем станет первый, кто напишет /start. Ещё аккаунты можно добавить из бота
+    owner_id: str = ""
 
     # Userbot (my.telegram.org → API development tools)
     tg_api_id: int = 0
@@ -37,6 +39,10 @@ class Settings(BaseSettings):
     timezone: str = "Europe/Moscow"
 
     db_path: str = "data/bot.db"
+
+    @property
+    def owner_ids(self) -> list[int]:
+        return [int(x) for x in re.split(r"[\s,;]+", self.owner_id) if x.isdigit()]
 
     @property
     def telethon_enabled(self) -> bool:

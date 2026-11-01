@@ -149,7 +149,7 @@ def tg():
 
 @pytest.fixture
 def settings():
-    return Settings(_env_file=None, bot_token="42:TEST", polza_api_key="x", owner_id=0, min_score=5, digest_size=5)
+    return Settings(_env_file=None, bot_token="42:TEST", polza_api_key="x", owner_id="", min_score=5, digest_size=5)
 
 
 @pytest.fixture

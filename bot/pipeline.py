@@ -62,8 +62,27 @@ class Pipeline:
     async def digest_times(self) -> str:
         return await self.db.get_setting("digest_times") or self.settings.digest_times
 
-    async def owner_id(self) -> int:
-        return self.settings.owner_id or int(await self.db.get_setting("owner_id") or 0)
+    async def owner_ids(self) -> list[int]:
+        """Аккаунты, которым бот отвечает: владелец (из .env или первый нажавший /start) и добавленные им."""
+        owners = self.settings.owner_ids or [int(v) for v in [await self.db.get_setting("owner_id")] if v]
+        extra = [int(v) for v in (await self.db.get_setting("extra_users") or "").split(",") if v]
+        return list(dict.fromkeys(owners + extra))
+
+    async def add_user(self, user_id: int) -> bool:
+        """False — у аккаунта уже есть доступ."""
+        if user_id in await self.owner_ids():
+            return False
+        extra = [v for v in (await self.db.get_setting("extra_users") or "").split(",") if v]
+        await self.db.set_setting("extra_users", ",".join(extra + [str(user_id)]))
+        return True
+
+    async def remove_user(self, user_id: int) -> bool:
+        """Убирает добавленный аккаунт. Главного владельца так не убрать — False."""
+        extra = [v for v in (await self.db.get_setting("extra_users") or "").split(",") if v]
+        if str(user_id) not in extra:
+            return False
+        await self.db.set_setting("extra_users", ",".join(v for v in extra if v != str(user_id)))
+        return True
 
     # --- источники ---
 
