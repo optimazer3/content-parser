@@ -281,3 +281,29 @@ async def test_size_all_and_long_digest_is_paginated(h):
     for page in pages:
         on_page = [int(b.text) for row in page.reply_markup.inline_keyboard for b in row]
         assert all(f"<b>{n}. Тема номер {n} " in page.text for n in on_page)
+
+
+async def test_skill_command_sets_writing_style(h):
+    await h.send("/skill")
+    assert "Сейчас пишу по умолчанию" in h.texts()[-1]
+    await h.send("Пиши коротко, как другу, без сленга, в конце — вывод одной строкой")
+    assert h.texts()[-1] == "✅ Запомнил. Следующие посты напишу так."
+    assert await h.pipeline.skill() == "Пиши коротко, как другу, без сленга, в конце — вывод одной строкой"
+
+    # описание уходит в нейросеть при уникализации
+    topic = await h.pipeline.manual_topic("Свой текст про нейросети " * 20)
+    await h.click(TopicCb(action="rewrite", id=topic.id))
+    assert h.pipeline.llm.calls[-1] == ("rewrite", (None, await h.pipeline.skill()))
+
+    await h.send("/settings")
+    assert "Как писать (/skill): Пиши коротко" in h.texts()[-1]
+    await h.send("/skill сброс")
+    assert await h.pipeline.skill() == ""
+
+
+async def test_manual_mode_without_schedule(h):
+    h.scheduler = None  # AUTO_COLLECT выключен — планировщика нет
+    await h.send("/time 9:00")
+    assert h.texts()[-1].startswith("Автоматические подборки выключены")
+    await h.send("/settings")
+    assert "Подборки: вручную, по команде /digest" in h.texts()[-1]

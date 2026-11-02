@@ -126,3 +126,14 @@ async def test_select_digest_without_limit_asks_for_all_topics():
 
 def test_fallback_digest_without_limit_keeps_everything():
     assert len(fallback_digest([item(1, 9, "a"), item(2, 6, "b"), item(3, 8, "c")], 0)) == 3
+
+
+async def test_writer_prompt_has_human_voice_and_user_skill():
+    llm, completions = make_llm(["пост", "пост"])
+    await llm.rewrite("текст", "", skill="Пиши как бывалый айтишник, без эмодзи")
+    system = completions.calls[0]["messages"][0]["content"]
+    assert "по-зумерски" in system and "сарказм" in system
+    assert "Пиши как бывалый айтишник, без эмодзи" in system and "следуй ему" in system
+    # без /skill блока с указанием автора нет
+    await llm.write_post("Тема", [item(1)], "")
+    assert "указание автора канала" not in completions.calls[1]["messages"][0]["content"]

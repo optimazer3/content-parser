@@ -18,7 +18,7 @@ router = Router()
 
 HELP = """<b>Что я умею</b>
 
-Два раза в день (по умолчанию в 10:00 и 19:00) присылаю подборку интересных тем из твоих каналов и сайтов. Под каждой темой есть кнопки:
+По команде /digest собираю новое из твоих каналов и сайтов и присылаю подборку тем. Нажми номер темы — придёт карточка с кнопками:
 ✍️ <b>Уникализировать</b> — перепишу пост своими словами
 📝 <b>Написать пост</b> — новый пост по теме на основе источников
 📖 <b>Подробнее</b> — расскажу детали
@@ -35,8 +35,9 @@ HELP = """<b>Что я умею</b>
 /sources — список источников (с удалением)
 /digest — подборка прямо сейчас
 /topics — какие темы тебе интересны
-/style — образцы твоих постов, чтобы писать в твоём стиле
-/time — время подборок: <code>/time 9:00 18:30</code>
+/skill — своими словами опиши, как писать посты: тон, длина, подача
+/style — образцы твоих постов, чтобы писать похоже
+/time — время автоматических подборок (если они включены)
 /size — сколько тем в подборке: <code>/size все</code> (по умолчанию) или <code>/size 10</code>
 /threshold — минимальная оценка темы 0–10: <code>/threshold 6</code>
 /settings — текущие настройки"""
@@ -45,6 +46,7 @@ HELP = """<b>Что я умею</b>
 class Form(StatesGroup):
     interests = State()
     style = State()
+    skill = State()
 
 
 @router.message(CommandStart())
@@ -171,8 +173,51 @@ async def set_style(message: Message, state: FSMContext, pipeline):
     await message.answer("✅ Запомнил стиль, буду писать похоже.")
 
 
+DEFAULT_SKILL = "живо и по-человечески, местами по-зумерски, с лёгким сарказмом там, где он уместен"
+
+
+@router.message(Command("skill"))
+async def cmd_skill(message: Message, command: CommandObject, state: FSMContext, pipeline):
+    arg = (command.args or "").strip()
+    if arg.lower() in ("сброс", "reset", "-"):
+        await pipeline.db.set_setting("skill", "")
+        await message.answer(f"✅ Вернул стиль по умолчанию: {DEFAULT_SKILL}.")
+        return
+    if arg:
+        await _save_skill(message, pipeline, arg)
+        return
+    current = await pipeline.skill()
+    await state.set_state(Form.skill)
+    await message.answer(
+        (f"<b>Сейчас пишу так:</b>\n{esc(shorten(current, 1500))}\n\n" if current
+         else f"<b>Сейчас пишу по умолчанию:</b> {DEFAULT_SKILL}.\n\n") +
+        "Опиши одним сообщением, как писать посты. Например: «Пиши коротко, до 600 символов, как будто объясняешь другу. "
+        "Без сленга, но с юмором. В конце — один вывод одной строкой. Эмодзи не больше двух».\n"
+        "/skill сброс — вернуть стиль по умолчанию, /cancel — оставить как есть."
+    )
+
+
+async def _save_skill(message: Message, pipeline, text: str) -> bool:
+    if len(text) < 10:
+        await message.answer("Слишком коротко — опиши хотя бы одним-двумя предложениями. /cancel — оставить как есть.")
+        return False
+    await pipeline.db.set_setting("skill", text)
+    await message.answer("✅ Запомнил. Следующие посты напишу так.")
+    return True
+
+
+@router.message(Form.skill, F.text)
+async def set_skill(message: Message, state: FSMContext, pipeline):
+    if await _save_skill(message, pipeline, message.text.strip()):
+        await state.clear()
+
+
 @router.message(Command("time"))
 async def cmd_time(message: Message, command: CommandObject, pipeline, scheduler):
+    if scheduler is None:
+        await message.answer("Автоматические подборки выключены: собираю новости, только когда ты нажмёшь /digest.\n"
+                             "Включить — впиши <code>AUTO_COLLECT=true</code> в .env и перезапусти бота.")
+        return
     if not command.args:
         await message.answer(f"Подборки приходят в: {esc(await pipeline.digest_times())}\n"
                              "Поменять: <code>/time 9:00 18:30</code>")
@@ -231,18 +276,25 @@ async def cmd_settings(message: Message, pipeline, settings):
     sources = await pipeline.db.list_sources()
     channels = sum(1 for s in sources if s.kind == "tg")
     tg_state = "подключено" if pipeline.tg else "не настроено (нужны TG_API_ID, TG_API_HASH и python -m bot.login)"
-    await message.answer(
-        "<b>Настройки</b>\n"
-        f"Аккаунты с доступом: {', '.join(map(str, await pipeline.owner_ids()))} (OWNER_ID в .env)\n"
-        f"Источники: каналов {channels}, сайтов {len(sources) - channels}\n"
-        f"Чтение каналов: {tg_state}\n"
-        f"Подборки: {esc(await pipeline.digest_times())} ({esc(settings.timezone)})\n"
-        f"Тем в подборке: {_size_label(await pipeline.int_setting('digest_size'))}\n"
-        f"Минимальная оценка: {await pipeline.int_setting('min_score')}\n"
-        f"Сбор новых постов: каждые {settings.collect_interval_min} мин\n"
-        f"Модель для отбора: <code>{esc(settings.llm_model_fast)}</code>\n"
-        f"Модель для текстов: <code>{esc(settings.llm_model_smart)}</code>\n"
-        f"Образец стиля: {'задан' if await pipeline.style() else 'нет'} (/style)\n\n"
-        f"<b>Интересы</b> (/topics):\n{esc(shorten(await pipeline.interests(), 600))}"
-    )
-
+    if settings.auto_collect:
+        schedule = (f"автоматически в {esc(await pipeline.digest_times())} ({esc(settings.timezone)}), "
+                    f"сбор каждые {settings.collect_interval_min} мин")
+    else:
+        schedule = "вручную, по команде /digest"
+    skill = await pipeline.skill()
+    lines = [
+        "<b>Настройки</b>",
+        f"Аккаунты с доступом: {', '.join(map(str, await pipeline.owner_ids()))} (OWNER_ID в .env)",
+        f"Источники: каналов {channels}, сайтов {len(sources) - channels}",
+        f"Чтение каналов: {tg_state}",
+        f"Подборки: {schedule}",
+        f"Тем в подборке: {_size_label(await pipeline.int_setting('digest_size'))}",
+        f"Минимальная оценка: {await pipeline.int_setting('min_score')}",
+        f"Модель для отбора: <code>{esc(settings.llm_model_fast)}</code>",
+        f"Модель для текстов: <code>{esc(settings.llm_model_smart)}</code>",
+        f"Как писать (/skill): {esc(shorten(skill, 200)) if skill else 'по умолчанию — ' + DEFAULT_SKILL}",
+        f"Образец стиля: {'задан' if await pipeline.style() else 'нет'} (/style)",
+        "",
+        f"<b>Интересы</b> (/topics):\n{esc(shorten(await pipeline.interests(), 600))}",
+    ]
+    await message.answer("\n".join(lines))

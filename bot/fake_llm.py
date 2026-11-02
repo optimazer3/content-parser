@@ -30,11 +30,12 @@ class FakeLLM:
         self.calls.append(("select_digest", tuple(i.id for i in candidates)))
         return fallback_digest(candidates, size)
 
-    async def rewrite(self, text: str, style: str, instruction: str | None = None) -> str:
-        self.calls.append(("rewrite", (instruction,)))
+    async def rewrite(self, text: str, style: str, instruction: str | None = None, skill: str = "") -> str:
+        self.calls.append(("rewrite", (instruction, skill)))
         return f"<b>[уникализация]</b>\n{shorten(text, 300)}"
 
-    async def write_post(self, topic: str, materials: list[Item], style: str, instruction: str | None = None) -> str:
+    async def write_post(self, topic: str, materials: list[Item], style: str, instruction: str | None = None,
+                         skill: str = "") -> str:
         self.calls.append(("write_post", (topic, len(materials), instruction)))
         return f"<b>[пост] {topic}</b>\nМатериалов: {len(materials)}"
 
@@ -42,6 +43,6 @@ class FakeLLM:
         self.calls.append(("explain", (topic,)))
         return f"[подробнее] {topic}"
 
-    async def refine(self, text: str, instruction: str, style: str, materials: list[Item]) -> str:
+    async def refine(self, text: str, instruction: str, style: str, materials: list[Item], skill: str = "") -> str:
         self.calls.append(("refine", (instruction,)))
         return f"{text}\n[правка: {instruction}]"

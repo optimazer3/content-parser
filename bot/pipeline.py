@@ -55,6 +55,10 @@ class Pipeline:
     async def style(self) -> str:
         return await self.db.get_setting("style") or ""
 
+    async def skill(self) -> str:
+        """Своими словами: как нейросети писать посты (/skill)."""
+        return await self.db.get_setting("skill") or ""
+
     async def int_setting(self, key: str) -> int:
         value = await self.db.get_setting(key)
         return int(value) if value else int(getattr(self.settings, key))
@@ -241,11 +245,12 @@ class Pipeline:
         materials = await self.materials(topic)
         if not materials:
             raise LookupError("исходный текст не найден")
-        return await self.llm.rewrite(materials[0].text, await self.style(), instruction)
+        return await self.llm.rewrite(materials[0].text, await self.style(), instruction, skill=await self.skill())
 
     async def write_post(self, topic: Topic, instruction: str | None = None) -> str:
         subject = topic.title + (f". {topic.summary}" if topic.summary else "")
-        return await self.llm.write_post(subject, await self.materials(topic), await self.style(), instruction)
+        return await self.llm.write_post(subject, await self.materials(topic), await self.style(), instruction,
+                                         skill=await self.skill())
 
     async def free_topic(self, query: str) -> Topic:
         """Тема для «напиши пост про …»: подбираем материалы из базы."""
@@ -259,4 +264,4 @@ class Pipeline:
     async def refine(self, draft: Draft, instruction: str) -> str:
         topic = await self.db.get_topic(draft.topic_id) if draft.topic_id else None
         materials = await self.materials(topic) if topic else []
-        return await self.llm.refine(draft.text, instruction, await self.style(), materials)
+        return await self.llm.refine(draft.text, instruction, await self.style(), materials, skill=await self.skill())

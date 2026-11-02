@@ -148,27 +148,31 @@ class LLM:
 
     # --- написание ---
 
-    def _writer(self, style: str) -> str:
-        return prompts.WRITER_SYSTEM.format(style=prompts.STYLE.format(style=style) if style else "")
+    def _writer(self, style: str, skill: str = "") -> str:
+        return prompts.WRITER_SYSTEM.format(
+            skill=prompts.SKILL.format(skill=skill) if skill else "",
+            style=prompts.STYLE.format(style=style) if style else "",
+        )
 
     @staticmethod
     def _instruction(instruction: str | None) -> str:
         return f"\nДополнительное указание: {instruction}\n" if instruction else ""
 
-    async def rewrite(self, text: str, style: str, instruction: str | None = None) -> str:
+    async def rewrite(self, text: str, style: str, instruction: str | None = None, skill: str = "") -> str:
         task = prompts.REWRITE_TASK.format(text=shorten(text, MATERIALS_LIMIT), instruction=self._instruction(instruction))
-        return await self.chat(self.smart_model, self._writer(style), task)
+        return await self.chat(self.smart_model, self._writer(style, skill), task)
 
-    async def write_post(self, topic: str, materials: list[Item], style: str, instruction: str | None = None) -> str:
+    async def write_post(self, topic: str, materials: list[Item], style: str, instruction: str | None = None,
+                         skill: str = "") -> str:
         template = prompts.WRITE_TASK if materials else prompts.WRITE_NO_MATERIALS
         task = template.format(topic=topic, materials=format_materials(materials), instruction=self._instruction(instruction))
-        return await self.chat(self.smart_model, self._writer(style), task)
+        return await self.chat(self.smart_model, self._writer(style, skill), task)
 
     async def explain(self, topic: str, materials: list[Item]) -> str:
         task = prompts.EXPLAIN_TASK.format(topic=topic, materials=format_materials(materials))
         return await self.chat(self.smart_model, self._writer(""), task)
 
-    async def refine(self, text: str, instruction: str, style: str, materials: list[Item]) -> str:
+    async def refine(self, text: str, instruction: str, style: str, materials: list[Item], skill: str = "") -> str:
         extra = prompts.REFINE_MATERIALS.format(materials=format_materials(materials, 8000)) if materials else ""
         task = prompts.REFINE_TASK.format(text=text, instruction=instruction, materials=extra)
-        return await self.chat(self.smart_model, self._writer(style), task)
+        return await self.chat(self.smart_model, self._writer(style, skill), task)

@@ -28,8 +28,8 @@ COMMANDS = [
     BotCommand(command="add", description="Добавить канал или сайт"),
     BotCommand(command="sources", description="Список источников"),
     BotCommand(command="topics", description="Какие темы интересны"),
+    BotCommand(command="skill", description="Как писать посты"),
     BotCommand(command="style", description="Образцы моих постов"),
-    BotCommand(command="time", description="Время подборок"),
     BotCommand(command="settings", description="Настройки"),
     BotCommand(command="help", description="Что умеет бот"),
 ]
@@ -94,8 +94,10 @@ async def main() -> None:
             default=DefaultBotProperties(parse_mode="HTML", link_preview_is_disabled=True),
         )
         stack.push_async_callback(bot.session.close)
-        scheduler = make_scheduler(settings.timezone, settings.collect_interval_min, bot, pipeline)
-        schedule_digests(scheduler, await pipeline.digest_times(), bot, pipeline)
+        scheduler = None
+        if settings.auto_collect:
+            scheduler = make_scheduler(settings.timezone, settings.collect_interval_min, bot, pipeline)
+            schedule_digests(scheduler, await pipeline.digest_times(), bot, pipeline)
 
         dp = make_dispatcher()
         dp.workflow_data.update(pipeline=pipeline, scheduler=scheduler, settings=settings)
@@ -107,9 +109,13 @@ async def main() -> None:
         except TelegramNetworkError:
             sys.exit(connection_hint(settings))
         await bot.set_my_commands(COMMANDS)
-        scheduler.start()
-        stack.callback(scheduler.shutdown, wait=False)
-        log.info("Бот @%s запущен. Подборки в %s. Остановить — Ctrl+C", me.username, await pipeline.digest_times())
+        if scheduler:
+            scheduler.start()
+            stack.callback(scheduler.shutdown, wait=False)
+            mode = f"подборки в {await pipeline.digest_times()}"
+        else:
+            mode = "сбор и подборка — по команде /digest"
+        log.info("Бот @%s запущен: %s. Остановить — Ctrl+C", me.username, mode)
         await dp.start_polling(bot)
 
 

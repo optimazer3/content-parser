@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     llm_model_fast: str = "openai/gpt-4.1-mini"  # оценка и отбор постов
     llm_model_smart: str = "openai/gpt-5.4"  # написание и уникализация
 
+    # Автоматический сбор каждые COLLECT_INTERVAL_MIN минут и подборки в DIGEST_TIMES.
+    # Выключено: сбор и подборка — только по команде /digest
+    auto_collect: bool = False
+
     # Расписание и отбор (можно поменять в боте командами /time и /size)
     digest_times: str = "10:00,19:00"
     digest_size: int = 0  # 0 — все новые темы по тематике, без ограничения
